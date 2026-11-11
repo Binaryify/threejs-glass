@@ -142,10 +142,13 @@ export function createFoliage() {
   return {
     scene,
     camera,
-    resize(aspect) {
+    // aspect: viewport w / h; overscan: how much larger than the view to draw
+    resize(aspect, overscan) {
       // keep leaves round on any aspect; spread the plant across the width
-      camera.left = -aspect;
-      camera.right = aspect;
+      camera.left = -aspect * overscan;
+      camera.right = aspect * overscan;
+      camera.top = overscan;
+      camera.bottom = -overscan;
       camera.updateProjectionMatrix();
       placeLeaves(leaves, aspect);
     },

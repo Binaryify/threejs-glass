@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createFoliage } from './foliage.js';
-import { createGlass } from './glass.js';
+import { createGlass, OVERSCAN } from './glass.js';
 
 const SCENE_SCALE = 0.25; // the plant is out of focus anyway; quarter res is enough
 const MAX_TILT = 0.35;    // radians the pane can be turned (as seen by the light)
@@ -23,10 +23,12 @@ function resize() {
   const w = innerWidth, h = innerHeight;
   const dpr = renderer.getPixelRatio();
   renderer.setSize(w, h, false);
-  target.setSize(Math.round(w * dpr * SCENE_SCALE), Math.round(h * dpr * SCENE_SCALE));
-  foliage.resize(w / h);
+  // the plant is drawn for the whole pane, which is OVERSCAN x the view
+  const s = dpr * SCENE_SCALE * OVERSCAN;
+  target.setSize(Math.round(w * s), Math.round(h * s));
+  foliage.resize(w / h, OVERSCAN);
   plantDirty = true;
-  glass.resize(w, h, dpr);
+  glass.resize(w, h);
   glass.uniforms.uCell.value = Math.max(16, Math.min(w, h) / 40);
   updateCoverFit();
 }
