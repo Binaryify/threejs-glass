@@ -1,8 +1,8 @@
 // A 3D pane of "wired hammered glass" in front of any texture:
 // procedural bump height field -> refraction + frost blur, embedded wire mesh,
 // and a fixed light whose reflection produces milky scatter and glints.
-// Turning the pane moves that reflection. The source is attached to the
-// pane, so the glass and what is behind it move together as one block.
+// Turning the pane moves that reflection. The source is a render of the 3D
+// scene behind the glass, which turns with the pane as one block.
 import * as THREE from 'three';
 
 const vertexShader = /* glsl */ `
@@ -23,8 +23,9 @@ const fragmentShader = /* glsl */ `
   precision highp float;
 
   uniform sampler2D tSource;
-  uniform vec2 uUvScale;   // cover-fit for arbitrary images
   uniform vec2 uRes;       // pane size in CSS px
+  uniform vec2 uScreen;    // drawing buffer size in device px
+  uniform float uOverscan; // pane size / viewport size (pane px -> screen uv)
   uniform vec3 uLightPos;  // fixed light in world space, in front of the pane
   uniform float uTime;
   uniform float uCell;     // wire grid cell size in CSS px
@@ -59,13 +60,13 @@ const fragmentShader = /* glsl */ `
   }
 
   vec3 source(vec2 uv) {
-    return texture2D(tSource, (uv - 0.5) * uUvScale + 0.5).rgb;
+    return texture2D(tSource, uv).rgb;
   }
 
   // 12-tap golden-angle disc blur = frosting.
   vec3 frosted(vec2 uv, float radiusPx) {
     vec3 acc = vec3(0.0);
-    vec2 px = radiusPx / uRes;
+    vec2 px = radiusPx / uRes * uOverscan;
     for (int i = 0; i < 12; i++) {
       float fi = float(i);
       float r = sqrt((fi + 0.5) / 12.0);
@@ -94,10 +95,10 @@ const fragmentShader = /* glsl */ `
     float relief = dot(N, L) - dot(Nm, L);                     // bump shading
 
     // refraction + frost (frost grows where the light scatters)
-    // The source covers the whole pane and is sampled in pane space, so the
-    // glass and the plant behind it move together as one block.
-    vec2 uv = vUv + nb.xy * 16.0 / uRes;
-    vec3 col = frosted(uv, 6.0 + 8.0 * haze);
+    // The source is the 3D scene behind the glass as seen on screen; it
+    // turns with the pane, so glass and plant move as one block with depth.
+    vec2 uv = gl_FragCoord.xy / uScreen + nb.xy * 16.0 / uRes * uOverscan;
+    vec3 col = frosted(uv, 3.0 + 10.0 * haze);
 
     col *= 1.0 + relief * (0.1 + 1.2 * glow);
     col = mix(col, vec3(0.84, 0.89, 0.83), clamp(haze, 0.0, 1.0) * 0.78);
@@ -125,13 +126,14 @@ const fragmentShader = /* glsl */ `
 
 const FOV = 35;
 // The pane is larger than the view so its edges stay hidden when it tilts.
-// 1.55 covers a 0.4 rad turn on both axes at once.
-export const OVERSCAN = 1.55;
+// 1.75 covers a 0.4 rad turn on both axes at once.
+const OVERSCAN = 1.75;
 
 export function createGlass() {
   const uniforms = {
     tSource: { value: null },
-    uUvScale: { value: new THREE.Vector2(1, 1) },
+    uScreen: { value: new THREE.Vector2(1, 1) },
+    uOverscan: { value: OVERSCAN },
     uRes: { value: new THREE.Vector2(1, 1) },
     // upper-left, slightly behind the viewer: its reflection starts top-left
     uLightPos: { value: new THREE.Vector3(-0.5, 0.5, 1.0) },
@@ -152,13 +154,14 @@ export function createGlass() {
     camera,
     pane,
     uniforms,
-    // w, h: viewport in CSS px
-    resize(w, h) {
+    // w, h: viewport in CSS px; dpr: device pixel ratio of the drawing buffer
+    resize(w, h, dpr) {
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       const visH = 2 * Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * camera.position.z;
       pane.scale.set(visH * camera.aspect * OVERSCAN, visH * OVERSCAN, 1);
       uniforms.uRes.value.set(w * OVERSCAN, h * OVERSCAN);
+      uniforms.uScreen.value.set(w * dpr, h * dpr);
     },
   };
 }

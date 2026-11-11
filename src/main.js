@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { createFoliage } from './foliage.js';
-import { createGlass, OVERSCAN } from './glass.js';
+import { createGlass } from './glass.js';
 
-const SCENE_SCALE = 0.25; // the plant is out of focus anyway; quarter res is enough
+const SCENE_SCALE = 0.5;  // half res keeps the in-focus leaves readable
 const MAX_TILT = 0.4;     // radians the pane can be turned (about 23 degrees)
 const DRAG_GAIN = 1.4;    // radians per viewport width dragged
 
@@ -15,30 +15,14 @@ const foliage = createFoliage();
 const glass = createGlass();
 const target = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true });
 
-let image = null; // uploaded THREE.Texture, or null to show the plant
-let plantDirty = true; // the plant is static: re-render it only after a resize
-
 function resize() {
   const w = innerWidth, h = innerHeight;
   const dpr = renderer.getPixelRatio();
   renderer.setSize(w, h, false);
-  // the plant is drawn for the whole pane, which is OVERSCAN x the view
-  const s = dpr * SCENE_SCALE * OVERSCAN;
-  target.setSize(Math.round(w * s), Math.round(h * s));
-  foliage.resize(w / h, OVERSCAN);
-  plantDirty = true;
-  glass.resize(w, h);
+  target.setSize(Math.round(w * dpr * SCENE_SCALE), Math.round(h * dpr * SCENE_SCALE));
+  glass.resize(w, h, dpr);
+  foliage.resize(glass.camera); // after glass.resize: it uses the camera aspect
   glass.uniforms.uCell.value = Math.max(16, Math.min(w, h) / 40);
-  updateCoverFit();
-}
-
-// Map screen uv -> image uv so an uploaded photo covers the viewport.
-function updateCoverFit() {
-  const s = glass.uniforms.uUvScale.value;
-  if (!image) return s.set(1, 1);
-  const screenA = innerWidth / innerHeight;
-  const imgA = image.image.width / image.image.height;
-  s.set(Math.min(1, screenA / imgA), Math.min(1, imgA / screenA));
 }
 
 // ---- drag to turn the whole pane --------------------------------------
@@ -56,10 +40,9 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const k = DRAG_GAIN / innerWidth;
-  tiltAim.set(
-    THREE.MathUtils.clamp(drag.aim.x + (e.clientY - drag.y) * k, -MAX_TILT, MAX_TILT),
-    THREE.MathUtils.clamp(drag.aim.y + (e.clientX - drag.x) * k, -MAX_TILT, MAX_TILT),
-  );
+  // limit the total turn (not each axis), so diagonal drags don't overshoot
+  tiltAim.set(drag.aim.x + (e.clientY - drag.y) * k, drag.aim.y + (e.clientX - drag.x) * k)
+    .clampLength(0, MAX_TILT);
 });
 const release = () => {
   drag = null;
@@ -87,6 +70,7 @@ function updateMotion(t, dt) {
   // A mirror turned to the left throws the reflection to the right, so the pane
   // turns against the drag and the light follows the hand.
   glass.pane.rotation.set(-tilt.x, -tilt.y, 0);
+  foliage.group.rotation.copy(glass.pane.rotation); // one block with the glass
 }
 
 // ---- controls -----------------------------------------------------------
@@ -99,7 +83,7 @@ pauseBtn.onclick = () => {
   pauseBtn.textContent = paused ? 'Resume' : 'Pause';
 };
 document.getElementById('pick').onclick = () => fileInput.click();
-document.getElementById('reset').onclick = () => setImage(null);
+document.getElementById('reset').onclick = () => foliage.setImage(null);
 fileInput.onchange = () => fileInput.files[0] && loadImage(fileInput.files[0]);
 addEventListener('dragover', (e) => e.preventDefault());
 addEventListener('drop', (e) => {
@@ -112,14 +96,8 @@ function loadImage(file) {
   const url = URL.createObjectURL(file);
   new THREE.TextureLoader().load(url, (tex) => {
     URL.revokeObjectURL(url);
-    setImage(tex);
+    foliage.setImage(tex);
   });
-}
-
-function setImage(tex) {
-  image?.dispose();
-  image = tex;
-  updateCoverFit();
 }
 
 // ---- loop ---------------------------------------------------------------
@@ -131,13 +109,11 @@ renderer.setAnimationLoop(() => {
   if (!paused) time += dt;
   updateMotion(time, dt);
 
-  if (!image && plantDirty) {
-    renderer.setRenderTarget(target);
-    renderer.render(foliage.scene, foliage.camera);
-    renderer.setRenderTarget(null);
-    plantDirty = false;
-  }
-  glass.uniforms.tSource.value = image ?? target.texture;
+  // the scene behind the glass turns with it, so it is drawn every frame
+  renderer.setRenderTarget(target);
+  renderer.render(foliage.scene, glass.camera);
+  renderer.setRenderTarget(null);
+  glass.uniforms.tSource.value = target.texture;
 
   glass.uniforms.uTime.value = time;
   renderer.render(glass.scene, glass.camera);
