@@ -6,7 +6,6 @@ const SCENE_SCALE = 0.25; // the plant is out of focus anyway; quarter res is en
 const MAX_TILT = 0.35;    // radians the pane can be turned (as seen by the light)
 const DRAG_GAIN = 1.4;    // radians per viewport width dragged
 const GEO_TILT = 0.3;     // visible geometric tilt, as a fraction of the light tilt
-const PARALLAX = 0.08;    // how far the farthest leaves shift at full tilt
 
 const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -18,6 +17,7 @@ const glass = createGlass();
 const target = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true });
 
 let image = null; // uploaded THREE.Texture, or null to show the plant
+let plantDirty = true; // the plant is static: re-render it only after a resize
 
 function resize() {
   const w = innerWidth, h = innerHeight;
@@ -25,6 +25,7 @@ function resize() {
   renderer.setSize(w, h, false);
   target.setSize(Math.round(w * dpr * SCENE_SCALE), Math.round(h * dpr * SCENE_SCALE));
   foliage.resize(w / h);
+  plantDirty = true;
   glass.resize(w, h, dpr);
   glass.uniforms.uCell.value = Math.max(16, Math.min(w, h) / 40);
   updateCoverFit();
@@ -90,8 +91,6 @@ function updateMotion(t, dt) {
   _euler.set(-tilt.x, -tilt.y, 0);
   glass.uniforms.uShade.value.setFromMatrix4(_rot.makeRotationFromEuler(_euler));
   glass.pane.rotation.set(-tilt.x * GEO_TILT, -tilt.y * GEO_TILT, 0);
-  // the plant sits behind the glass, so it slides the other way
-  foliage.setParallax((-tilt.y / MAX_TILT) * PARALLAX, (tilt.x / MAX_TILT) * PARALLAX);
 }
 
 // ---- controls -----------------------------------------------------------
@@ -136,15 +135,13 @@ renderer.setAnimationLoop(() => {
   if (!paused) time += dt;
   updateMotion(time, dt);
 
-  if (image) {
-    glass.uniforms.tSource.value = image;
-  } else {
-    foliage.update(time);
+  if (!image && plantDirty) {
     renderer.setRenderTarget(target);
     renderer.render(foliage.scene, foliage.camera);
     renderer.setRenderTarget(null);
-    glass.uniforms.tSource.value = target.texture;
+    plantDirty = false;
   }
+  glass.uniforms.tSource.value = image ?? target.texture;
 
   glass.uniforms.uTime.value = time;
   renderer.render(glass.scene, glass.camera);

@@ -1,6 +1,6 @@
 // Procedural "plant behind the glass": a soft gradient backdrop plus
-// instanced leaves that sway in the wind. Rendered off-screen and then
-// refracted by the glass pass, so it never needs to look sharp.
+// instanced leaves. It is static, so it is rendered off-screen once per
+// resize and then refracted by the glass pass; it never needs to look sharp.
 import * as THREE from 'three';
 
 const LEAF_COUNT = 460;
@@ -13,22 +13,16 @@ function leafGeometry() {
   return new THREE.ShapeGeometry(s, 10);
 }
 
-// Shared by both materials: (x, y) shift applied to the farthest layer.
-const parallax = { value: new THREE.Vector2() };
-
 const backdropMaterial = new THREE.ShaderMaterial({
-  uniforms: { uTime: { value: 0 }, uParallax: parallax },
   depthWrite: false,
   vertexShader: /* glsl */ `
-    uniform vec2 uParallax;
     varying vec2 vUv;
     void main() {
-      vUv = uv - uParallax * 0.5;
+      vUv = uv;
       gl_Position = vec4(position.xy, 0.999, 1.0);
     }
   `,
   fragmentShader: /* glsl */ `
-    uniform float uTime;
     varying vec2 vUv;
     float blob(vec2 c, float r) { return smoothstep(r, 0.0, length(vUv - c)); }
     void main() {
@@ -36,9 +30,8 @@ const backdropMaterial = new THREE.ShaderMaterial({
       float t = clamp(vUv.x * 0.9 + (1.0 - vUv.y) * 0.6 - 0.25, 0.0, 1.0);
       vec3 col = mix(vec3(0.30, 0.42, 0.24), vec3(0.02, 0.09, 0.03), t);
       // a few large out-of-focus light patches
-      float w = sin(uTime * 0.3) * 0.02;
-      col += vec3(0.20, 0.30, 0.10) * blob(vec2(0.78 + w, 0.80), 0.25);
-      col += vec3(0.12, 0.22, 0.06) * blob(vec2(0.35, 0.25 - w), 0.30);
+      col += vec3(0.20, 0.30, 0.10) * blob(vec2(0.78, 0.80), 0.25);
+      col += vec3(0.12, 0.22, 0.06) * blob(vec2(0.35, 0.25), 0.30);
       col += vec3(0.10, 0.16, 0.05) * blob(vec2(0.95, 0.30), 0.22);
       gl_FragColor = vec4(col, 1.0);
     }
@@ -46,31 +39,15 @@ const backdropMaterial = new THREE.ShaderMaterial({
 });
 
 const leafMaterial = new THREE.ShaderMaterial({
-  uniforms: { uTime: { value: 0 }, uParallax: parallax },
   side: THREE.DoubleSide,
   vertexShader: /* glsl */ `
-    attribute float aSeed;
     attribute vec3 aColor;
-    uniform float uTime;
-    uniform vec2 uParallax;
     varying vec2 vLeaf;
     varying vec3 vColor;
     void main() {
-      vec3 p = position;
-      // flutter around the stem (local origin)
-      float a = sin(uTime * (0.7 + aSeed * 0.8) + aSeed * 40.0) * 0.14
-              + sin(uTime * 2.1 + aSeed * 13.0) * 0.05;
-      float c = cos(a), s = sin(a);
-      p.xy = mat2(c, s, -s, c) * p.xy;
-      vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
-      // whole-plant wind sway
-      wp.x += sin(uTime * 0.55 + wp.y * 1.7) * 0.015;
-      wp.y += cos(uTime * 0.45 + wp.x * 1.3) * 0.008;
-      // far leaves (small z) drift more than near ones -> depth
-      wp.xy += uParallax * (1.0 - wp.z * 1.4);
       vLeaf = position.xy;
       vColor = aColor;
-      gl_Position = projectionMatrix * viewMatrix * wp;
+      gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
     }
   `,
   fragmentShader: /* glsl */ `
@@ -99,7 +76,6 @@ function gauss(rand) {
 function buildLeaves() {
   const rand = rng(7);
   const mesh = new THREE.InstancedMesh(leafGeometry(), leafMaterial, LEAF_COUNT);
-  const seeds = new Float32Array(LEAF_COUNT);
   const colors = new Float32Array(LEAF_COUNT * 3);
 
   // Clusters biased toward the right and bottom, like a plant pressed to a window.
@@ -127,13 +103,12 @@ function buildLeaves() {
       rand() * Math.PI * 2,
     ]);
 
-    seeds[i] = rand();
+    rand(); // keep the seeded sequence, so the plant looks the same as before
     c.copy(dark).lerp(bright, 0.25 + depth * 0.75 * rand());
     if (rand() < 0.08) c.lerp(yellow, 0.6);
     colors.set([c.r, c.g, c.b], i * 3);
   }
 
-  mesh.geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
   mesh.geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
   mesh.frustumCulled = false;
   return { mesh, layout };
@@ -173,13 +148,6 @@ export function createFoliage() {
       camera.right = aspect;
       camera.updateProjectionMatrix();
       placeLeaves(leaves, aspect);
-    },
-    setParallax(x, y) {
-      parallax.value.set(x, y);
-    },
-    update(time) {
-      backdropMaterial.uniforms.uTime.value = time;
-      leafMaterial.uniforms.uTime.value = time;
     },
   };
 }
