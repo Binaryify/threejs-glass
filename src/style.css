@@ -25,7 +25,8 @@ body {
   gap: 8px;
 }
 
-.controls button {
+.controls button,
+.controls a {
   font: inherit;
   font-size: 11px;
   color: inherit;
@@ -37,6 +38,14 @@ body {
   backdrop-filter: blur(6px);
 }
 
-.controls button:hover {
+.controls a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.controls button:hover,
+.controls a:hover {
   background: rgba(0, 0, 0, 0.55);
 }
