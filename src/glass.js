@@ -8,8 +8,11 @@ import * as THREE from 'three';
 const vertexShader = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vWorld;
+  varying mat3 vFrame;    // pane tangent, bitangent, normal in world space
   void main() {
     vUv = uv;
+    mat3 m = mat3(modelMatrix);
+    vFrame = mat3(normalize(m[0]), normalize(m[1]), normalize(m[2]));
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
     gl_Position = projectionMatrix * viewMatrix * world;
@@ -23,12 +26,12 @@ const fragmentShader = /* glsl */ `
   uniform vec2 uUvScale;   // cover-fit for arbitrary images
   uniform vec2 uRes;       // pane size in CSS px
   uniform vec3 uLightPos;  // fixed light in world space, in front of the pane
-  uniform mat3 uShade;     // pane orientation used for lighting
   uniform float uTime;
   uniform float uCell;     // wire grid cell size in CSS px
 
   varying vec2 vUv;
   varying vec3 vWorld;
+  varying mat3 vFrame;
 
   // ---- noise ------------------------------------------------------------
   vec2 hash2(vec2 p) {
@@ -76,10 +79,10 @@ const fragmentShader = /* glsl */ `
     vec2 p = vUv * uRes;                 // CSS px on the pane
     vec3 nb = glassNormal(p);            // bump normal, pane space
 
-    // Lighting is in world space with the pane turned by uShade, so turning it
-    // sweeps the reflection of the fixed light across the glass (2x the angle).
-    vec3 Nm = uShade[2];
-    vec3 N = normalize(uShade * nb);
+    // Lighting is in world space, so turning the pane sweeps the reflection
+    // of the fixed light across the glass (at twice the angle).
+    vec3 Nm = vFrame[2];
+    vec3 N = normalize(vFrame * nb);
     vec3 V = normalize(cameraPosition - vWorld);
     vec3 L = normalize(uLightPos - vWorld);
     vec3 H = normalize(L + V);
@@ -122,7 +125,8 @@ const fragmentShader = /* glsl */ `
 
 const FOV = 35;
 // The pane is larger than the view so its edges stay hidden when it tilts.
-export const OVERSCAN = 1.25;
+// 1.55 covers a 0.4 rad turn on both axes at once.
+export const OVERSCAN = 1.55;
 
 export function createGlass() {
   const uniforms = {
@@ -131,7 +135,6 @@ export function createGlass() {
     uRes: { value: new THREE.Vector2(1, 1) },
     // upper-left, slightly behind the viewer: its reflection starts top-left
     uLightPos: { value: new THREE.Vector3(-0.5, 0.5, 1.0) },
-    uShade: { value: new THREE.Matrix3() },
     uTime: { value: 0 },
     uCell: { value: 24 },
   };

@@ -3,9 +3,8 @@ import { createFoliage } from './foliage.js';
 import { createGlass, OVERSCAN } from './glass.js';
 
 const SCENE_SCALE = 0.25; // the plant is out of focus anyway; quarter res is enough
-const MAX_TILT = 0.35;    // radians the pane can be turned (as seen by the light)
+const MAX_TILT = 0.4;     // radians the pane can be turned (about 23 degrees)
 const DRAG_GAIN = 1.4;    // radians per viewport width dragged
-const GEO_TILT = 0.3;     // visible geometric tilt, as a fraction of the light tilt
 
 const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -73,8 +72,6 @@ canvas.addEventListener('pointercancel', release);
 // Damped spring: a heavy pane that follows the hand and settles with a sway.
 const STIFFNESS = 40, DAMPING = 9;
 const _force = new THREE.Vector2();
-const _euler = new THREE.Euler();
-const _rot = new THREE.Matrix4();
 
 function updateMotion(t, dt) {
   // a faint idle breathing so the light is never perfectly still
@@ -88,11 +85,8 @@ function updateMotion(t, dt) {
   tilt.addScaledVector(tiltVel, dt);
 
   // A mirror turned to the left throws the reflection to the right, so the pane
-  // turns against the drag and the light follows the hand. The visible tilt
-  // is small; the lighting sees the full angle, like a big pane far away.
-  _euler.set(-tilt.x, -tilt.y, 0);
-  glass.uniforms.uShade.value.setFromMatrix4(_rot.makeRotationFromEuler(_euler));
-  glass.pane.rotation.set(-tilt.x * GEO_TILT, -tilt.y * GEO_TILT, 0);
+  // turns against the drag and the light follows the hand.
+  glass.pane.rotation.set(-tilt.x, -tilt.y, 0);
 }
 
 // ---- controls -----------------------------------------------------------
