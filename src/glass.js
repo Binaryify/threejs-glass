@@ -1,14 +1,18 @@
 // A 3D pane of "wired hammered glass" in front of any texture:
 // procedural bump height field -> refraction + frost blur, embedded wire mesh,
-// and a moving point light that produces milky scatter and specular glints.
-// The source is sampled in screen space, so tilting the pane creates parallax.
+// and a fixed light whose reflection produces milky scatter and glints.
+// Turning the pane moves that reflection; the source is sampled in screen
+// space, so the scene behind also shifts relative to the glass.
 import * as THREE from 'three';
 
 const vertexShader = /* glsl */ `
   varying vec2 vUv;
+  varying vec3 vWorld;
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
   }
 `;
 
@@ -19,12 +23,13 @@ const fragmentShader = /* glsl */ `
   uniform vec2 uUvScale;   // cover-fit for arbitrary images
   uniform vec2 uRes;       // pane size in CSS px
   uniform vec2 uScreen;    // drawing buffer size in device px
-  uniform vec2 uLight;     // light position on the pane in CSS px (y up)
-  uniform float uPress;    // 0..1, how hard the pane is being held
+  uniform vec3 uLightPos;  // fixed light in world space, in front of the pane
+  uniform mat3 uShade;     // pane orientation used for lighting
   uniform float uTime;
   uniform float uCell;     // wire grid cell size in CSS px
 
   varying vec2 vUv;
+  varying vec3 vWorld;
 
   // ---- noise ------------------------------------------------------------
   vec2 hash2(vec2 p) {
@@ -70,29 +75,32 @@ const fragmentShader = /* glsl */ `
 
   void main() {
     vec2 p = vUv * uRes;                 // CSS px on the pane
-    float minRes = min(uRes.x, uRes.y);
-    vec3 n = glassNormal(p);
+    vec3 nb = glassNormal(p);            // bump normal, pane space
 
-    // light: wide milky halo + sharp glints off every dimple
-    vec2 toLight = uLight - p;
-    float dist = length(toLight) / minRes;
-    // holding spreads the fog across the pane
-    float haze = exp(-dist * dist * mix(10.0, 3.0, uPress));
-    vec3 L = normalize(vec3(toLight, 0.45 * minRes));
-    vec3 H = normalize(L + vec3(0.0, 0.0, 1.0));
-    float spec = pow(max(dot(n, H), 0.0), 70.0);
-    float relief = dot(n, L) - L.z;      // bump shading relative to flat glass
+    // Lighting is in world space with the pane turned by uShade, so turning it
+    // sweeps the reflection of the fixed light across the glass (2x the angle).
+    vec3 Nm = uShade[2];
+    vec3 N = normalize(uShade * nb);
+    vec3 V = normalize(cameraPosition - vWorld);
+    vec3 L = normalize(uLightPos - vWorld);
+    vec3 H = normalize(L + V);
 
-    // refraction + frost (frost grows inside the halo, like light scattering)
-    vec2 uv = gl_FragCoord.xy / uScreen + n.xy * 16.0 / uRes;
-    vec3 col = frosted(uv, 6.0 + (6.0 + 6.0 * uPress) * haze);
+    float nh = max(dot(Nm, H), 0.0);
+    float haze = pow(nh, 70.0) * 0.8 + pow(nh, 16.0) * 0.3;   // milky scatter
+    float glow = pow(nh, 16.0);
+    float spec = pow(max(dot(N, H), 0.0), 150.0) * (0.02 + 1.1 * pow(nh, 40.0));
+    float relief = dot(N, L) - dot(Nm, L);                     // bump shading
 
-    col *= 1.0 + relief * (0.15 + 0.8 * haze);
-    col = mix(col, vec3(0.84, 0.89, 0.83), haze * (0.7 + 0.15 * uPress));
-    col += spec * (0.03 + 0.8 * haze) * vec3(1.0, 1.0, 0.96);
+    // refraction + frost (frost grows where the light scatters)
+    vec2 uv = gl_FragCoord.xy / uScreen + nb.xy * 16.0 / uRes;
+    vec3 col = frosted(uv, 6.0 + 8.0 * haze);
+
+    col *= 1.0 + relief * (0.1 + 1.2 * glow);
+    col = mix(col, vec3(0.84, 0.89, 0.83), clamp(haze, 0.0, 1.0) * 0.78);
+    col += spec * vec3(1.0, 1.0, 0.96);
 
     // wire mesh, seen through the bumps so it wobbles slightly
-    vec2 pw = p + n.xy * 0.9;
+    vec2 pw = p + nb.xy * 0.9;
     vec2 g = abs(fract(pw / uCell + 0.5) - 0.5) * uCell;
     float d = min(g.x, g.y);
     float wire = 1.0 - smoothstep(0.25, 1.05, d);
@@ -112,7 +120,7 @@ const fragmentShader = /* glsl */ `
 `;
 
 const FOV = 35;
-const OVERSCAN = 1.2; // pane is larger than the view so tilted edges stay hidden
+const OVERSCAN = 1.25; // pane is larger than the view so tilted edges stay hidden
 
 export function createGlass() {
   const uniforms = {
@@ -120,8 +128,9 @@ export function createGlass() {
     uUvScale: { value: new THREE.Vector2(1, 1) },
     uRes: { value: new THREE.Vector2(1, 1) },
     uScreen: { value: new THREE.Vector2(1, 1) },
-    uLight: { value: new THREE.Vector2(0, 0) },
-    uPress: { value: 0 },
+    // upper-left, slightly behind the viewer: its reflection starts top-left
+    uLightPos: { value: new THREE.Vector3(-0.5, 0.5, 1.0) },
+    uShade: { value: new THREE.Matrix3() },
     uTime: { value: 0 },
     uCell: { value: 24 },
   };

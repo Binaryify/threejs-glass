@@ -3,9 +3,10 @@ import { createFoliage } from './foliage.js';
 import { createGlass } from './glass.js';
 
 const SCENE_SCALE = 0.25; // the plant is out of focus anyway; quarter res is enough
-const IDLE_MS = 2500;     // after this, the light drifts on its own
-const MAX_TILT = 0.16;    // radians the pane leans while held
-const PARALLAX = 0.06;    // how far the farthest leaves shift at full tilt
+const MAX_TILT = 0.35;    // radians the pane can be turned (as seen by the light)
+const DRAG_GAIN = 1.4;    // radians per viewport width dragged
+const GEO_TILT = 0.3;     // visible geometric tilt, as a fraction of the light tilt
+const PARALLAX = 0.08;    // how far the farthest leaves shift at full tilt
 
 const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -38,62 +39,59 @@ function updateCoverFit() {
   s.set(Math.min(1, screenA / imgA), Math.min(1, imgA / screenA));
 }
 
-// ---- pointer ------------------------------------------------------------
-const pointer = new THREE.Vector2(); // NDC, -1..1
-let lastMove = -Infinity;
-let holding = false;
+// ---- drag to turn the whole pane --------------------------------------
+// tilt follows the hand: +x = dragged down, +y = dragged right.
+const tilt = new THREE.Vector2();
+const tiltVel = new THREE.Vector2();
+const tiltAim = new THREE.Vector2();
+let drag = null; // { x, y, aim } at pointerdown
 
-function setPointer(e) {
-  pointer.set((e.clientX / innerWidth) * 2 - 1, 1 - (e.clientY / innerHeight) * 2);
-  lastMove = performance.now();
-}
-canvas.addEventListener('pointermove', setPointer);
 canvas.addEventListener('pointerdown', (e) => {
-  setPointer(e);
-  holding = true;
+  drag = { x: e.clientX, y: e.clientY, aim: tiltAim.clone() };
   canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('dragging');
 });
-const release = () => (holding = false);
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const k = DRAG_GAIN / innerWidth;
+  tiltAim.set(
+    THREE.MathUtils.clamp(drag.aim.x + (e.clientY - drag.y) * k, -MAX_TILT, MAX_TILT),
+    THREE.MathUtils.clamp(drag.aim.y + (e.clientX - drag.x) * k, -MAX_TILT, MAX_TILT),
+  );
+});
+const release = () => {
+  drag = null;
+  tiltAim.set(0, 0); // the pane swings back on its own
+  canvas.classList.remove('dragging');
+};
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 
-// ---- motion: light, press and tilt all ease toward their targets --------
-const raycaster = new THREE.Raycaster();
-const light = new THREE.Vector2(0.35, 0.7); // pane uv
-const lightAim = light.clone();
-const tilt = new THREE.Vector2(); // (rotation x, rotation y)
-const tiltAim = new THREE.Vector2();
-let press = 0;
-
-const ease = (rate, dt) => 1 - Math.exp(-dt * rate);
+// Damped spring: a heavy pane that follows the hand and settles with a sway.
+const STIFFNESS = 40, DAMPING = 9;
+const _force = new THREE.Vector2();
+const _euler = new THREE.Euler();
+const _rot = new THREE.Matrix4();
 
 function updateMotion(t, dt) {
-  if (!holding && performance.now() - lastMove > IDLE_MS) {
-    pointer.set(0.62 * Math.sin(t * 0.21), 0.55 * Math.sin(t * 0.33 + 1.2));
-  }
+  // a faint idle breathing so the light is never perfectly still
+  const idle = drag ? 0 : 1;
+  const aimX = tiltAim.x + idle * 0.015 * Math.sin(t * 0.4);
+  const aimY = tiltAim.y + idle * 0.02 * Math.sin(t * 0.27 + 1.0);
 
-  // press: quick to sink in, slower to recover
-  press += ((holding ? 1 : 0) - press) * ease(holding ? 2.5 : 1.5, dt);
+  _force.set(aimX - tilt.x, aimY - tilt.y).multiplyScalar(STIFFNESS)
+    .addScaledVector(tiltVel, -DAMPING);
+  tiltVel.addScaledVector(_force, dt);
+  tilt.addScaledVector(tiltVel, dt);
 
-  // the pane leans away under the finger and springs flat on release
-  tiltAim.set(-pointer.y, pointer.x).multiplyScalar(holding ? MAX_TILT : 0);
-  tilt.lerp(tiltAim, ease(4, dt));
-  glass.pane.rotation.set(tilt.x, tilt.y, 0);
-  glass.pane.position.z = -0.04 * press;
-  glass.pane.updateMatrixWorld();
-
+  // A mirror turned to the left throws the reflection to the right, so the pane
+  // turns against the drag and the light follows the hand. The visible tilt
+  // is small; the lighting sees the full angle, like a big pane far away.
+  _euler.set(-tilt.x, -tilt.y, 0);
+  glass.uniforms.uShade.value.setFromMatrix4(_rot.makeRotationFromEuler(_euler));
+  glass.pane.rotation.set(-tilt.x * GEO_TILT, -tilt.y * GEO_TILT, 0);
   // the plant sits behind the glass, so it slides the other way
   foliage.setParallax((-tilt.y / MAX_TILT) * PARALLAX, (tilt.x / MAX_TILT) * PARALLAX);
-
-  // the light lives on the pane: project the pointer onto the tilted surface
-  raycaster.setFromCamera(pointer, glass.camera);
-  const hit = raycaster.intersectObject(glass.pane)[0];
-  if (hit) lightAim.copy(hit.uv);
-  light.lerp(lightAim, ease(3, dt));
-
-  const u = glass.uniforms;
-  u.uLight.value.copy(light).multiply(u.uRes.value);
-  u.uPress.value = press;
 }
 
 // ---- controls -----------------------------------------------------------
